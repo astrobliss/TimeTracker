@@ -3,8 +3,15 @@ import SwiftData
 
 struct TaskRowView: View {
     @Bindable var task: TrackedTask
+    var isKeyboardSelected: Bool = false
+    var shouldEdit: Bool = false
+    var shouldDelete: Bool = false
+    var onEditHandled: (() -> Void)?
+    var onDeleteHandled: (() -> Void)?
+    
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var timeTrackingManager: TimeTrackingManager
+    @ObservedObject private var undoManager = AppUndoManager.shared
     
     @Query(sort: \Project.name) private var projects: [Project]
     
@@ -16,6 +23,8 @@ struct TaskRowView: View {
     @State private var editHours: Int = 0
     @State private var editMinutes: Int = 0
     @State private var editProject: Project?
+    @State private var editNotes: String = ""
+    @State private var showingNotes = false
     
     private var isActive: Bool {
         timeTrackingManager.isTaskActive(task)
@@ -111,6 +120,17 @@ struct TaskRowView: View {
                         Spacer()
                     }
                     
+                    // Notes
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Notes:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        
+                        TextField("Add notes...", text: $editNotes, axis: .vertical)
+                            .textFieldStyle(.roundedBorder)
+                            .lineLimit(3...5)
+                    }
+                    
                     // Action buttons
                     HStack {
                         Spacer()
@@ -136,77 +156,130 @@ struct TaskRowView: View {
                 .cornerRadius(8)
             } else {
                 // Normal task row
-                HStack(spacing: 12) {
-                    // Project color indicator
-                    if let project = task.project {
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(project.color)
-                            .frame(width: 4)
-                    }
-                    
-                    // Task info
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(task.name)
-                            .font(.body)
-                            .lineLimit(1)
+                VStack(spacing: 0) {
+                    HStack(spacing: 12) {
+                        // Project color indicator
+                        if let project = task.project {
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(project.color)
+                                .frame(width: 4)
+                        }
                         
-                        HStack(spacing: 8) {
-                            // Estimate
-                            Label(task.formattedEstimate, systemImage: "target")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        // Task info
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 4) {
+                                Text(task.name)
+                                    .font(.body)
+                                    .lineLimit(1)
+                                
+                                if task.hasNotes {
+                                    Image(systemName: "note.text")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
                             
-                            // Tracked time
-                            if task.totalTrackedSeconds > 0 {
-                                Label(task.formattedTracked, systemImage: "clock")
+                            HStack(spacing: 8) {
+                                // Estimate
+                                Label(task.formattedEstimate, systemImage: "target")
                                     .font(.caption)
-                                    .foregroundStyle(task.remainingSeconds < 0 ? .red : .secondary)
-                            }
-                        }
-                    }
-                    
-                    Spacer()
-                    
-                    // Play/Stop button
-                    Button(action: toggleTracking) {
-                        Image(systemName: isActive ? "stop.circle.fill" : "play.circle.fill")
-                            .font(.system(size: 28))
-                            .foregroundStyle(isActive ? .red : .green)
-                    }
-                    .buttonStyle(.borderless)
-                    
-                    // More options menu
-                    Menu {
-                        Button("Edit") {
-                            startEditing()
-                        }
-                        
-                        Button("Mark Complete") {
-                            task.isCompleted = true
-                            if isActive {
-                                timeTrackingManager.stopTracking(context: modelContext)
+                                    .foregroundStyle(.secondary)
+                                
+                                // Tracked time
+                                if task.totalTrackedSeconds > 0 {
+                                    Label(task.formattedTracked, systemImage: "clock")
+                                        .font(.caption)
+                                        .foregroundStyle(task.remainingSeconds < 0 ? .red : .secondary)
+                                }
                             }
                         }
                         
+                        Spacer()
+                        
+                        // Play/Stop button
+                        Button(action: toggleTracking) {
+                            Image(systemName: isActive ? "stop.circle.fill" : "play.circle.fill")
+                                .font(.system(size: 28))
+                                .foregroundStyle(isActive ? .red : .green)
+                        }
+                        .buttonStyle(.borderless)
+                        
+                        // More options menu
+                        Menu {
+                            Button("Edit") {
+                                startEditing()
+                            }
+                            
+                            if task.hasNotes {
+                                Button(showingNotes ? "Hide Notes" : "Show Notes") {
+                                    withAnimation(.easeInOut(duration: 0.15)) {
+                                        showingNotes.toggle()
+                                    }
+                                }
+                            }
+                            
+                            Button("Mark Complete") {
+                                task.isCompleted = true
+                                if isActive {
+                                    timeTrackingManager.stopTracking(context: modelContext)
+                                }
+                            }
+                            
+                            Divider()
+                            
+                            Button("Delete", role: .destructive) {
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    showingDeleteConfirmation = true
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "chevron.down")
+                                .foregroundStyle(.secondary)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .frame(width: 24)
+                    }
+                    .padding(12)
+                    
+                    // Notes display
+                    if showingNotes, let notes = task.notes, !notes.isEmpty {
                         Divider()
+                            .padding(.horizontal, 12)
                         
-                        Button("Delete", role: .destructive) {
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                showingDeleteConfirmation = true
-                            }
-                        }
-                    } label: {
-                        Image(systemName: "chevron.down")
+                        Text(notes)
+                            .font(.caption)
                             .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
                     }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .frame(width: 24)
                 }
-                .padding(12)
-                .background(isActive ? Color.accentColor.opacity(0.1) : Color(nsColor: .controlBackgroundColor))
+                .background(
+                    isKeyboardSelected ? Color.accentColor.opacity(0.2) :
+                    isActive ? Color.accentColor.opacity(0.1) : Color(nsColor: .controlBackgroundColor)
+                )
                 .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(isKeyboardSelected ? Color.accentColor : .clear, lineWidth: 2)
+                )
                 .animation(.easeInOut(duration: 0.2), value: isActive)
+                .animation(.easeInOut(duration: 0.15), value: isKeyboardSelected)
+            }
+        }
+        .onChange(of: shouldEdit) { _, newValue in
+            if newValue {
+                startEditing()
+                onEditHandled?()
+            }
+        }
+        .onChange(of: shouldDelete) { _, newValue in
+            if newValue {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    showingDeleteConfirmation = true
+                }
+                onDeleteHandled?()
             }
         }
     }
@@ -217,6 +290,7 @@ struct TaskRowView: View {
         editHours = task.estimatedSeconds / 3600
         editMinutes = (task.estimatedSeconds % 3600) / 60
         editProject = task.project
+        editNotes = task.notes ?? ""
         
         withAnimation(.easeInOut(duration: 0.15)) {
             showingEditMode = true
@@ -227,6 +301,7 @@ struct TaskRowView: View {
         task.name = editName.trimmingCharacters(in: .whitespaces)
         task.estimatedSeconds = editHours * 3600 + editMinutes * 60
         task.project = editProject
+        task.notes = editNotes.isEmpty ? nil : editNotes
         
         withAnimation(.easeInOut(duration: 0.15)) {
             showingEditMode = false
@@ -245,7 +320,50 @@ struct TaskRowView: View {
         if isActive {
             timeTrackingManager.stopTracking(context: modelContext)
         }
+        
+        // Store task data for undo
+        let taskName = task.name
+        let taskEstimatedSeconds = task.estimatedSeconds
+        let taskProject = task.project
+        let taskOrderIndex = task.orderIndex
+        let taskNotes = task.notes
+        let taskTimeEntries = task.timeEntries ?? []
+        
+        // Store time entry data
+        let entryData = taskTimeEntries.map { entry in
+            (startTime: entry.startTime, endTime: entry.endTime)
+        }
+        
+        // Delete the task
         modelContext.delete(task)
+        try? modelContext.save()
+        
+        // Show undo toast
+        undoManager.showUndo(message: "Deleted \"\(taskName)\"") { [weak modelContext] in
+            guard let modelContext = modelContext else { return }
+            
+            // Recreate the task
+            let restoredTask = TrackedTask(
+                name: taskName,
+                estimatedSeconds: taskEstimatedSeconds,
+                project: taskProject,
+                orderIndex: taskOrderIndex,
+                notes: taskNotes
+            )
+            modelContext.insert(restoredTask)
+            
+            // Recreate time entries
+            for entryInfo in entryData {
+                let entry = TimeEntry(task: restoredTask)
+                entry.startTime = entryInfo.startTime
+                entry.endTime = entryInfo.endTime
+                modelContext.insert(entry)
+            }
+            
+            try? modelContext.save()
+        }
+        
+        showingDeleteConfirmation = false
     }
 }
 

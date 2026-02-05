@@ -56,10 +56,19 @@ struct TimeTrackerApp: App {
 // MARK: - Keyboard Shortcut Modifiers
 
 struct KeyboardShortcuts {
-    static let addTask = KeyboardShortcut("n", modifiers: .command)
-    static let stopTracking = KeyboardShortcut(".", modifiers: .command)
+    // Tab navigation
     static let switchToTasks = KeyboardShortcut("1", modifiers: .command)
     static let switchToHistory = KeyboardShortcut("2", modifiers: .command)
+    static let switchToStats = KeyboardShortcut("3", modifiers: .command)
+    
+    // Task actions
+    static let addTask = KeyboardShortcut("n", modifiers: .command)
+    static let editTask = KeyboardShortcut("e", modifiers: .command)
+    static let deleteTask = KeyboardShortcut("d", modifiers: .command)
+    static let stopTracking = KeyboardShortcut(".", modifiers: .command)
+    
+    // Navigation
+    static let escape = KeyboardShortcut(.escape, modifiers: [])
 }
 
 struct MenuBarLabel: View {
@@ -68,7 +77,7 @@ struct MenuBarLabel: View {
     var body: some View {
         if let remainingSeconds = timeTrackingManager.remainingSeconds {
             Text(formatMenuBarTime(remainingSeconds))
-                .monospacedDigit()
+                .font(.system(.body, design: .monospaced))
         } else {
             Image(systemName: "timer")
         }
@@ -76,9 +85,15 @@ struct MenuBarLabel: View {
     
     private func formatMenuBarTime(_ seconds: Int) -> String {
         let absSeconds = abs(seconds)
-        let minutes = absSeconds / 60
+        let hours = absSeconds / 3600
+        let minutes = (absSeconds % 3600) / 60
         let secs = absSeconds % 60
         let sign = seconds < 0 ? "-" : ""
-        return String(format: "%@%d:%02d", sign, minutes, secs)
+        
+        if hours > 0 {
+            return String(format: "%@%d:%02d:%02d", sign, hours, minutes, secs)
+        } else {
+            return String(format: "%@%d:%02d", sign, minutes, secs)
+        }
     }
 }

@@ -9,13 +9,14 @@ final class TrackedTask {
     var createdAt: Date
     var isCompleted: Bool
     var orderIndex: Int
+    var notes: String?
     
     var project: Project?
     
     @Relationship(deleteRule: .cascade, inverse: \TimeEntry.task)
     var timeEntries: [TimeEntry]?
     
-    init(name: String, estimatedSeconds: Int, project: Project? = nil, orderIndex: Int = 0) {
+    init(name: String, estimatedSeconds: Int, project: Project? = nil, orderIndex: Int = 0, notes: String? = nil) {
         self.id = UUID()
         self.name = name
         self.estimatedSeconds = estimatedSeconds
@@ -24,6 +25,12 @@ final class TrackedTask {
         self.orderIndex = orderIndex
         self.project = project
         self.timeEntries = []
+        self.notes = notes
+    }
+    
+    var hasNotes: Bool {
+        guard let notes = notes else { return false }
+        return !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     
     var totalTrackedSeconds: Int {

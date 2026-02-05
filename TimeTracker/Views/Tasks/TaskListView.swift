@@ -16,6 +16,23 @@ struct TaskListView: View {
     @State private var draggingTask: TrackedTask?
     @FocusState private var isInputFocused: Bool
     
+    // Search and filter state
+    @State private var searchText = ""
+    @State private var selectedFilter: TaskFilter = .all
+    @State private var selectedProjectFilter: Project?
+    @State private var showingFilters = false
+    
+    // Keyboard navigation state
+    @State private var selectedTaskId: UUID?
+    @FocusState private var isTaskListFocused: Bool
+    
+    enum TaskFilter: String, CaseIterable {
+        case all = "All"
+        case todayTracked = "Tracked Today"
+        case hasTimeLeft = "Time Remaining"
+        case overTime = "Over Time"
+    }
+    
     var body: some View {
         VStack(spacing: 0) {
             // Active timer display
@@ -24,21 +41,41 @@ struct TaskListView: View {
                 ActiveTimerBanner(task: task, remainingSeconds: remaining)
             }
             
+            // Search and filter bar
+            SearchFilterBar(
+                searchText: $searchText,
+                selectedFilter: $selectedFilter,
+                selectedProject: $selectedProjectFilter,
+                projects: projects,
+                showingFilters: $showingFilters
+            )
+            
             // Task list
             ScrollView {
                 LazyVStack(spacing: 8) {
-                    if activeTasks.isEmpty {
-                        EmptyTasksView()
+                    if filteredTasks.isEmpty {
+                        if activeTasks.isEmpty {
+                            EmptyTasksView()
+                        } else {
+                            NoResultsView(searchText: searchText, filter: selectedFilter)
+                        }
                     } else {
                         // Group tasks by project
-                        ForEach(groupedTasks.keys.sorted(), id: \.self) { projectName in
-                            if let tasks = groupedTasks[projectName] {
+                        ForEach(filteredGroupedTasks.keys.sorted(), id: \.self) { projectName in
+                            if let tasks = filteredGroupedTasks[projectName] {
                                 TaskGroupView(
                                     projectName: projectName,
                                     tasks: tasks,
                                     draggingTask: $draggingTask,
+                                    selectedTaskId: $selectedTaskId,
+                                    editSelectedTask: $editSelectedTask,
+                                    deleteSelectedTask: $deleteSelectedTask,
                                     onReorder: { fromTask, toTask in
                                         reorderTask(fromTask, to: toTask)
+                                    },
+                                    onSelect: { task in
+                                        selectedTaskId = task.id
+                                        isTaskListFocused = true
                                     }
                                 )
                             }
@@ -61,6 +98,13 @@ struct TaskListView: View {
             
             // Bottom toolbar
             HStack {
+                // Keyboard shortcuts help
+                if isTaskListFocused && selectedTaskId != nil {
+                    Text("↑↓ Navigate • ⏎ Start • ⌘E Edit • ⌘⌫ Delete")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                
                 Spacer()
                 
                 Button(action: onManageProjects) {
@@ -74,6 +118,91 @@ struct TaskListView: View {
             .padding(.horizontal, 12)
             .padding(.bottom, 8)
         }
+        .focusable()
+        .focused($isTaskListFocused)
+        .onKeyPress(.upArrow) {
+            selectPreviousTask()
+            return .handled
+        }
+        .onKeyPress(.downArrow) {
+            selectNextTask()
+            return .handled
+        }
+        .onKeyPress(.return) {
+            if let taskId = selectedTaskId, let task = filteredTasks.first(where: { $0.id == taskId }) {
+                toggleTracking(for: task)
+            }
+            return .handled
+        }
+        .onKeyPress(.escape) {
+            selectedTaskId = nil
+            isTaskListFocused = false
+            return .handled
+        }
+        .background(
+            // Hidden buttons for keyboard shortcuts
+            Group {
+                Button("") {
+                    isInputFocused = true
+                }
+                .keyboardShortcut("n", modifiers: .command)
+                .hidden()
+                
+                Button("") {
+                    if let taskId = selectedTaskId {
+                        editSelectedTask = taskId
+                    }
+                }
+                .keyboardShortcut("e", modifiers: .command)
+                .hidden()
+                
+                Button("") {
+                    if let taskId = selectedTaskId {
+                        deleteSelectedTask = taskId
+                    }
+                }
+                .keyboardShortcut(.delete, modifiers: .command)
+                .hidden()
+            }
+        )
+    }
+    
+    // Keyboard navigation helpers
+    @State private var editSelectedTask: UUID?
+    @State private var deleteSelectedTask: UUID?
+    
+    private func selectNextTask() {
+        let tasks = filteredTasks
+        guard !tasks.isEmpty else { return }
+        
+        if let currentId = selectedTaskId,
+           let currentIndex = tasks.firstIndex(where: { $0.id == currentId }) {
+            let nextIndex = min(currentIndex + 1, tasks.count - 1)
+            selectedTaskId = tasks[nextIndex].id
+        } else {
+            selectedTaskId = tasks.first?.id
+        }
+    }
+    
+    private func selectPreviousTask() {
+        let tasks = filteredTasks
+        guard !tasks.isEmpty else { return }
+        
+        if let currentId = selectedTaskId,
+           let currentIndex = tasks.firstIndex(where: { $0.id == currentId }) {
+            let prevIndex = max(currentIndex - 1, 0)
+            selectedTaskId = tasks[prevIndex].id
+        } else {
+            selectedTaskId = tasks.last?.id
+        }
+    }
+    
+    private func toggleTracking(for task: TrackedTask) {
+        if timeTrackingManager.isTaskActive(task) {
+            timeTrackingManager.stopTracking(context: modelContext)
+        } else {
+            timeTrackingManager.startTracking(task: task, context: modelContext)
+        }
     }
     
     private var groupedTasks: [String: [TrackedTask]] {
@@ -86,6 +215,55 @@ struct TaskListView: View {
             groups[projectName]?.append(task)
         }
         // Tasks are already sorted by orderIndex from the query
+        return groups
+    }
+    
+    private var filteredTasks: [TrackedTask] {
+        var tasks = activeTasks
+        
+        // Apply search filter
+        if !searchText.isEmpty {
+            let searchLower = searchText.lowercased()
+            tasks = tasks.filter { task in
+                task.name.lowercased().contains(searchLower) ||
+                (task.project?.name.lowercased().contains(searchLower) ?? false)
+            }
+        }
+        
+        // Apply project filter
+        if let project = selectedProjectFilter {
+            tasks = tasks.filter { $0.project?.id == project.id }
+        }
+        
+        // Apply status filter
+        switch selectedFilter {
+        case .all:
+            break
+        case .todayTracked:
+            let today = Calendar.current.startOfDay(for: Date())
+            tasks = tasks.filter { task in
+                task.timeEntries?.contains { entry in
+                    Calendar.current.isDate(entry.startTime, inSameDayAs: today)
+                } ?? false
+            }
+        case .hasTimeLeft:
+            tasks = tasks.filter { $0.remainingSeconds > 0 }
+        case .overTime:
+            tasks = tasks.filter { $0.remainingSeconds < 0 }
+        }
+        
+        return tasks
+    }
+    
+    private var filteredGroupedTasks: [String: [TrackedTask]] {
+        var groups: [String: [TrackedTask]] = [:]
+        for task in filteredTasks {
+            let projectName = task.project?.name ?? "No Project"
+            if groups[projectName] == nil {
+                groups[projectName] = []
+            }
+            groups[projectName]?.append(task)
+        }
         return groups
     }
     
@@ -420,7 +598,11 @@ struct TaskGroupView: View {
     let projectName: String
     let tasks: [TrackedTask]
     @Binding var draggingTask: TrackedTask?
+    @Binding var selectedTaskId: UUID?
+    @Binding var editSelectedTask: UUID?
+    @Binding var deleteSelectedTask: UUID?
     let onReorder: (TrackedTask, TrackedTask) -> Void
+    var onSelect: ((TrackedTask) -> Void)?
     
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -430,31 +612,41 @@ struct TaskGroupView: View {
                 .padding(.leading, 4)
             
             ForEach(tasks) { task in
-                TaskRowView(task: task)
-                    .opacity(draggingTask?.id == task.id ? 0.5 : 1.0)
-                    .draggable(task.id.uuidString) {
-                        // Drag preview
-                        TaskDragPreview(task: task)
-                            .onAppear {
-                                draggingTask = task
-                            }
-                    }
-                    .dropDestination(for: String.self) { items, location in
-                        guard let draggedTaskId = items.first,
-                              let draggedTask = draggingTask,
-                              draggedTaskId == draggedTask.id.uuidString else {
-                            return false
+                TaskRowView(
+                    task: task,
+                    isKeyboardSelected: selectedTaskId == task.id,
+                    shouldEdit: editSelectedTask == task.id,
+                    shouldDelete: deleteSelectedTask == task.id,
+                    onEditHandled: { editSelectedTask = nil },
+                    onDeleteHandled: { deleteSelectedTask = nil }
+                )
+                .opacity(draggingTask?.id == task.id ? 0.5 : 1.0)
+                .onTapGesture {
+                    onSelect?(task)
+                }
+                .draggable(task.id.uuidString) {
+                    // Drag preview
+                    TaskDragPreview(task: task)
+                        .onAppear {
+                            draggingTask = task
                         }
-                        
-                        // Only allow reordering within the same project
-                        let draggedProjectName = draggedTask.project?.name ?? "No Project"
-                        if draggedProjectName == projectName {
-                            onReorder(draggedTask, task)
-                        }
-                        return true
-                    } isTargeted: { isTargeted in
-                        // Visual feedback when dragging over
+                }
+                .dropDestination(for: String.self) { items, location in
+                    guard let draggedTaskId = items.first,
+                          let draggedTask = draggingTask,
+                          draggedTaskId == draggedTask.id.uuidString else {
+                        return false
                     }
+                    
+                    // Only allow reordering within the same project
+                    let draggedProjectName = draggedTask.project?.name ?? "No Project"
+                    if draggedProjectName == projectName {
+                        onReorder(draggedTask, task)
+                    }
+                    return true
+                } isTargeted: { isTargeted in
+                    // Visual feedback when dragging over
+                }
             }
         }
         .onChange(of: draggingTask) { oldValue, newValue in
@@ -507,10 +699,150 @@ struct EmptyTasksView: View {
     }
 }
 
+struct NoResultsView: View {
+    let searchText: String
+    let filter: TaskListView.TaskFilter
+    
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 40))
+                .foregroundStyle(.secondary)
+            
+            if !searchText.isEmpty {
+                Text("No tasks matching \"\(searchText)\"")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("No tasks match the current filter")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+            }
+            
+            Text("Try a different search or filter")
+                .font(.caption)
+                .foregroundStyle(Color.gray.opacity(0.6))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.vertical, 40)
+    }
+}
+
+struct SearchFilterBar: View {
+    @Binding var searchText: String
+    @Binding var selectedFilter: TaskListView.TaskFilter
+    @Binding var selectedProject: Project?
+    let projects: [Project]
+    @Binding var showingFilters: Bool
+    
+    private var hasActiveFilters: Bool {
+        selectedFilter != .all || selectedProject != nil
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Search bar
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16)
+                
+                TextField("Search tasks...", text: $searchText)
+                    .textFieldStyle(.plain)
+                
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                }
+                
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        showingFilters.toggle()
+                    }
+                } label: {
+                    Image(systemName: hasActiveFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                        .foregroundStyle(hasActiveFilters ? Color.accentColor : Color.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help("Filter tasks")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .cornerRadius(8)
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            
+            // Filter options
+            if showingFilters {
+                VStack(spacing: 8) {
+                    // Status filter
+                    HStack {
+                        Text("Status:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        
+                        Picker("Filter", selection: $selectedFilter) {
+                            ForEach(TaskListView.TaskFilter.allCases, id: \.self) { filter in
+                                Text(filter.rawValue).tag(filter)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
+                    
+                    // Project filter
+                    HStack {
+                        Text("Project:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        
+                        Picker("Project", selection: $selectedProject) {
+                            Text("All Projects").tag(nil as Project?)
+                            ForEach(projects) { project in
+                                HStack {
+                                    Circle()
+                                        .fill(project.color)
+                                        .frame(width: 8, height: 8)
+                                    Text(project.name)
+                                }
+                                .tag(project as Project?)
+                            }
+                        }
+                        .labelsHidden()
+                        
+                        Spacer()
+                        
+                        if hasActiveFilters {
+                            Button("Clear") {
+                                selectedFilter = .all
+                                selectedProject = nil
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.bottom, 4)
+    }
+}
+
 // MARK: - Settings Menu
 
 struct SettingsMenuView: View {
     @StateObject private var launchAtLogin = LaunchAtLoginManager.shared
+    @EnvironmentObject private var timeTrackingManager: TimeTrackingManager
     
     var body: some View {
         Menu {
@@ -518,6 +850,30 @@ struct SettingsMenuView: View {
                 get: { launchAtLogin.isEnabled },
                 set: { _ in launchAtLogin.toggle() }
             ))
+            
+            Divider()
+            
+            // Notification settings
+            Toggle("Timer Notifications", isOn: $timeTrackingManager.notificationsEnabled)
+            
+            if timeTrackingManager.notificationsEnabled {
+                Toggle("Notification Sound", isOn: $timeTrackingManager.soundEnabled)
+                
+                Menu("Warning at...") {
+                    ForEach([1, 2, 5, 10, 15], id: \.self) { minutes in
+                        Button {
+                            timeTrackingManager.warningThresholdMinutes = minutes
+                        } label: {
+                            HStack {
+                                Text("\(minutes) minute\(minutes == 1 ? "" : "s")")
+                                if timeTrackingManager.warningThresholdMinutes == minutes {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             
             Divider()
             
