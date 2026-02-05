@@ -1,0 +1,267 @@
+import SwiftUI
+import SwiftData
+
+struct TaskRowView: View {
+    @Bindable var task: TrackedTask
+    @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var timeTrackingManager: TimeTrackingManager
+    
+    @Query(sort: \Project.name) private var projects: [Project]
+    
+    @State private var showingDeleteConfirmation = false
+    @State private var showingEditMode = false
+    
+    // Edit state
+    @State private var editName: String = ""
+    @State private var editHours: Int = 0
+    @State private var editMinutes: Int = 0
+    @State private var editProject: Project?
+    
+    private var isActive: Bool {
+        timeTrackingManager.isTaskActive(task)
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            if showingDeleteConfirmation {
+                // Inline delete confirmation
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Delete \"\(task.name)\"?")
+                            .font(.callout)
+                            .fontWeight(.medium)
+                        Text("This will delete all time entries")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    
+                    Spacer()
+                    
+                    Button("Cancel") {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            showingDeleteConfirmation = false
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    
+                    Button("Delete") {
+                        deleteTask()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                    .controlSize(.small)
+                }
+                .padding(12)
+                .background(Color.red.opacity(0.1))
+                .cornerRadius(8)
+            } else if showingEditMode {
+                // Inline edit mode
+                VStack(alignment: .leading, spacing: 12) {
+                    // Task name
+                    TextField("Task name", text: $editName)
+                        .textFieldStyle(.roundedBorder)
+                    
+                    // Time estimate
+                    HStack {
+                        Text("Estimate:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        
+                        Picker("Hours", selection: $editHours) {
+                            ForEach(0..<24, id: \.self) { hour in
+                                Text("\(hour)h").tag(hour)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 60)
+                        
+                        Picker("Minutes", selection: $editMinutes) {
+                            ForEach([0, 5, 10, 15, 20, 25, 30, 45], id: \.self) { minute in
+                                Text("\(minute)m").tag(minute)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 60)
+                        
+                        Spacer()
+                    }
+                    
+                    // Project selection
+                    HStack {
+                        Text("Project:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        
+                        Picker("Project", selection: $editProject) {
+                            Text("No Project").tag(nil as Project?)
+                            
+                            ForEach(projects) { project in
+                                HStack {
+                                    Circle()
+                                        .fill(project.color)
+                                        .frame(width: 8, height: 8)
+                                    Text(project.name)
+                                }
+                                .tag(project as Project?)
+                            }
+                        }
+                        .labelsHidden()
+                        
+                        Spacer()
+                    }
+                    
+                    // Action buttons
+                    HStack {
+                        Spacer()
+                        
+                        Button("Cancel") {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                showingEditMode = false
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
+                        
+                        Button("Save") {
+                            saveEdit()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(editName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                }
+                .padding(12)
+                .background(Color.accentColor.opacity(0.1))
+                .cornerRadius(8)
+            } else {
+                // Normal task row
+                HStack(spacing: 12) {
+                    // Project color indicator
+                    if let project = task.project {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(project.color)
+                            .frame(width: 4)
+                    }
+                    
+                    // Task info
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(task.name)
+                            .font(.body)
+                            .lineLimit(1)
+                        
+                        HStack(spacing: 8) {
+                            // Estimate
+                            Label(task.formattedEstimate, systemImage: "target")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            
+                            // Tracked time
+                            if task.totalTrackedSeconds > 0 {
+                                Label(task.formattedTracked, systemImage: "clock")
+                                    .font(.caption)
+                                    .foregroundStyle(task.remainingSeconds < 0 ? .red : .secondary)
+                            }
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    // Play/Stop button
+                    Button(action: toggleTracking) {
+                        Image(systemName: isActive ? "stop.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 28))
+                            .foregroundStyle(isActive ? .red : .green)
+                    }
+                    .buttonStyle(.borderless)
+                    
+                    // More options menu
+                    Menu {
+                        Button("Edit") {
+                            startEditing()
+                        }
+                        
+                        Button("Mark Complete") {
+                            task.isCompleted = true
+                            if isActive {
+                                timeTrackingManager.stopTracking(context: modelContext)
+                            }
+                        }
+                        
+                        Divider()
+                        
+                        Button("Delete", role: .destructive) {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                showingDeleteConfirmation = true
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .foregroundStyle(.secondary)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .frame(width: 24)
+                }
+                .padding(12)
+                .background(isActive ? Color.accentColor.opacity(0.1) : Color(nsColor: .controlBackgroundColor))
+                .cornerRadius(8)
+                .animation(.easeInOut(duration: 0.2), value: isActive)
+            }
+        }
+    }
+    
+    private func startEditing() {
+        // Initialize edit state from current task values
+        editName = task.name
+        editHours = task.estimatedSeconds / 3600
+        editMinutes = (task.estimatedSeconds % 3600) / 60
+        editProject = task.project
+        
+        withAnimation(.easeInOut(duration: 0.15)) {
+            showingEditMode = true
+        }
+    }
+    
+    private func saveEdit() {
+        task.name = editName.trimmingCharacters(in: .whitespaces)
+        task.estimatedSeconds = editHours * 3600 + editMinutes * 60
+        task.project = editProject
+        
+        withAnimation(.easeInOut(duration: 0.15)) {
+            showingEditMode = false
+        }
+    }
+    
+    private func toggleTracking() {
+        if isActive {
+            timeTrackingManager.stopTracking(context: modelContext)
+        } else {
+            timeTrackingManager.startTracking(task: task, context: modelContext)
+        }
+    }
+    
+    private func deleteTask() {
+        if isActive {
+            timeTrackingManager.stopTracking(context: modelContext)
+        }
+        modelContext.delete(task)
+    }
+}
+
+#Preview {
+    let config = ModelConfiguration(isStoredInMemoryOnly: true)
+    let container = try! ModelContainer(for: Project.self, TrackedTask.self, TimeEntry.self, configurations: config)
+    
+    let project = Project(name: "Work", colorHex: "#FF5733")
+    container.mainContext.insert(project)
+    
+    let task = TrackedTask(name: "Design new feature", estimatedSeconds: 3600, project: project)
+    container.mainContext.insert(task)
+    
+    return TaskRowView(task: task)
+        .modelContainer(container)
+        .environmentObject(TimeTrackingManager())
+        .padding()
+        .frame(width: 340)
+}
