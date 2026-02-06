@@ -371,6 +371,17 @@ struct TimeEntryRowView: View {
     private func saveEdit() {
         entry.startTime = editStartTime
         entry.endTime = editEndTime
+        
+        // Force SwiftData to propagate the change to the parent task's observers
+        // so that computed properties like totalTrackedSeconds are re-evaluated
+        if let task = entry.task, var entries = task.timeEntries {
+            if let idx = entries.firstIndex(where: { $0.id == entry.id }) {
+                entries.remove(at: idx)
+                entries.insert(entry, at: idx)
+            }
+            task.timeEntries = entries
+        }
+        
         try? modelContext.save()
         withAnimation(.easeInOut(duration: 0.15)) {
             isEditing = false
@@ -383,6 +394,10 @@ struct TimeEntryRowView: View {
         let entryStartTime = entry.startTime
         let entryEndTime = entry.endTime
         let taskName = entryTask?.name ?? "Unknown"
+        
+        // Explicitly remove from the task's relationship to trigger observation
+        // (modelContext.delete alone doesn't notify the task's observers)
+        entryTask?.timeEntries?.removeAll(where: { $0.id == entry.id })
         
         // Delete the entry
         modelContext.delete(entry)
@@ -397,6 +412,9 @@ struct TimeEntryRowView: View {
             restoredEntry.startTime = entryStartTime
             restoredEntry.endTime = entryEndTime
             modelContext.insert(restoredEntry)
+            
+            // Re-add to task's relationship to ensure observation fires
+            entryTask?.timeEntries?.append(restoredEntry)
             
             try? modelContext.save()
         }
