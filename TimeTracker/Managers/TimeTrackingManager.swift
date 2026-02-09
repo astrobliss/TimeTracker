@@ -2,6 +2,8 @@ import Foundation
 import SwiftUI
 import Combine
 import UserNotifications
+import AppKit
+import SwiftData
 
 @MainActor
 class TimeTrackingManager: ObservableObject {
@@ -32,6 +34,12 @@ class TimeTrackingManager: ObservableObject {
     private var hasSentWarningNotification = false
     private var hasSentExpiredNotification = false
     
+    // Sleep/wake auto-pause
+    private var sleepTime: Date?
+    private var trackingContext: ModelContext?
+    private var sleepObserver: AnyCancellable?
+    private var wakeObserver: AnyCancellable?
+    
     var isTracking: Bool {
         activeTask != nil
     }
@@ -42,6 +50,7 @@ class TimeTrackingManager: ObservableObject {
         self.soundEnabled = UserDefaults.standard.object(forKey: "soundEnabled") as? Bool ?? true
         
         requestNotificationPermission()
+        setupSleepWakeObservers()
     }
     
     func requestNotificationPermission() {
@@ -50,6 +59,49 @@ class TimeTrackingManager: ObservableObject {
                 print("Notification permission error: \(error)")
             }
         }
+    }
+    
+    // MARK: - Sleep/Wake Auto-Pause
+    
+    private func setupSleepWakeObservers() {
+        let workspaceNC = NSWorkspace.shared.notificationCenter
+        
+        sleepObserver = workspaceNC
+            .publisher(for: NSWorkspace.willSleepNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.sleepTime = Date()
+            }
+        
+        wakeObserver = workspaceNC
+            .publisher(for: NSWorkspace.didWakeNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.handleWake()
+            }
+    }
+    
+    private func handleWake() {
+        guard let sleepTime = sleepTime else { return }
+        self.sleepTime = nil
+        
+        let sleepDuration = Date().timeIntervalSince(sleepTime)
+        let thirtyMinutes: TimeInterval = 30 * 60
+        
+        guard sleepDuration > thirtyMinutes,
+              isTracking,
+              let context = trackingContext else { return }
+        
+        let taskName = activeTask?.name ?? "Your task"
+        
+        // Stop tracking with end time set to when the computer went to sleep
+        stopTracking(context: context, endTime: sleepTime)
+        
+        sendNotification(
+            title: "Task Paused",
+            body: "\(taskName) was paused — your computer was asleep for more than 30 minutes.",
+            identifier: "sleep-pause-\(UUID().uuidString)"
+        )
     }
     
     func startTracking(task: TrackedTask, context: ModelContext) {
@@ -66,6 +118,7 @@ class TimeTrackingManager: ObservableObject {
         activeTimeEntry = entry
         startTime = Date()
         elapsedSeconds = 0
+        trackingContext = context
         
         // Reset notification flags
         hasSentWarningNotification = false
@@ -77,15 +130,20 @@ class TimeTrackingManager: ObservableObject {
         try? context.save()
     }
     
-    func stopTracking(context: ModelContext) {
+    func stopTracking(context: ModelContext, endTime: Date? = nil) {
         timer?.cancel()
         timer = nil
         
-        activeTimeEntry?.stop()
+        if let endTime = endTime {
+            activeTimeEntry?.endTime = endTime
+        } else {
+            activeTimeEntry?.stop()
+        }
         
         activeTask = nil
         activeTimeEntry = nil
         startTime = nil
+        trackingContext = nil
         elapsedSeconds = 0
         remainingSeconds = nil
         
@@ -171,8 +229,6 @@ class TimeTrackingManager: ObservableObject {
         activeTask?.id == task.id
     }
 }
-
-import SwiftData
 
 extension ModelContext {
     @MainActor
