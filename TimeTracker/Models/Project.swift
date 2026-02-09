@@ -23,6 +23,13 @@ final class Project {
     var color: Color {
         Color(hex: colorHex) ?? .blue
     }
+    
+    /// Shared color palette used across all project color pickers
+    static let colorPalette = [
+        "#FF5733", "#FF8C00", "#FFD700",
+        "#32CD32", "#007AFF", "#5856D6",
+        "#AF52DE", "#FF2D55", "#8E8E93"
+    ]
 }
 
 extension Color {

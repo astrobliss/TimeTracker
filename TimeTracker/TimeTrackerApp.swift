@@ -25,7 +25,6 @@ struct TimeTrackerApp: App {
             let storeURL = appSupport.appendingPathComponent("default.store")
             
             for suffix in ["", "-shm", "-wal"] {
-                let fileURL = storeURL.appendingPathExtension(suffix.isEmpty ? "" : String(suffix.dropFirst()))
                 let urlToDelete = suffix.isEmpty ? storeURL : URL(fileURLWithPath: storeURL.path + suffix)
                 try? FileManager.default.removeItem(at: urlToDelete)
             }
@@ -53,47 +52,15 @@ struct TimeTrackerApp: App {
     }
 }
 
-// MARK: - Keyboard Shortcut Modifiers
-
-struct KeyboardShortcuts {
-    // Tab navigation
-    static let switchToTasks = KeyboardShortcut("1", modifiers: .command)
-    static let switchToHistory = KeyboardShortcut("2", modifiers: .command)
-    static let switchToStats = KeyboardShortcut("3", modifiers: .command)
-    
-    // Task actions
-    static let addTask = KeyboardShortcut("n", modifiers: .command)
-    static let editTask = KeyboardShortcut("e", modifiers: .command)
-    static let deleteTask = KeyboardShortcut("d", modifiers: .command)
-    static let stopTracking = KeyboardShortcut(".", modifiers: .command)
-    
-    // Navigation
-    static let escape = KeyboardShortcut(.escape, modifiers: [])
-}
-
 struct MenuBarLabel: View {
     @ObservedObject var timeTrackingManager: TimeTrackingManager
     
     var body: some View {
         if let remainingSeconds = timeTrackingManager.remainingSeconds {
-            Text(formatMenuBarTime(remainingSeconds))
+            Text(TimeFormatter.format(seconds: remainingSeconds, showSign: true))
                 .font(.system(.body, design: .monospaced))
         } else {
             Image(systemName: "timer")
-        }
-    }
-    
-    private func formatMenuBarTime(_ seconds: Int) -> String {
-        let absSeconds = abs(seconds)
-        let hours = absSeconds / 3600
-        let minutes = (absSeconds % 3600) / 60
-        let secs = absSeconds % 60
-        let sign = seconds < 0 ? "-" : ""
-        
-        if hours > 0 {
-            return String(format: "%@%d:%02d:%02d", sign, hours, minutes, secs)
-        } else {
-            return String(format: "%@%d:%02d", sign, minutes, secs)
         }
     }
 }

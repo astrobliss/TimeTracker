@@ -13,11 +13,7 @@ struct ProjectManagerView: View {
     @State private var newProjectName = ""
     @State private var newProjectColor = "#007AFF"
     
-    private let colorOptions = [
-        "#FF5733", "#FF8C00", "#FFD700",
-        "#32CD32", "#007AFF", "#5856D6",
-        "#AF52DE", "#FF2D55", "#8E8E93"
-    ]
+    private let colorOptions = Project.colorPalette
     
     var body: some View {
         VStack(spacing: 0) {
@@ -243,11 +239,7 @@ struct ProjectEditView: View {
     @State private var projectName = ""
     @State private var selectedColor = "#007AFF"
     
-    private let colorOptions = [
-        "#FF5733", "#FF8C00", "#FFD700",
-        "#32CD32", "#007AFF", "#5856D6",
-        "#AF52DE", "#FF2D55", "#8E8E93"
-    ]
+    private let colorOptions = Project.colorPalette
     
     var body: some View {
         VStack(spacing: 0) {

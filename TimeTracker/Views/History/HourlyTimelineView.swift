@@ -48,9 +48,7 @@ struct HourlyTimelineView: View {
     }
     
     private var dateString: String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .full
-        return formatter.string(from: date)
+        TimeFormatter.fullDateFormatter.string(from: date)
     }
     
     private var totalSeconds: Int {
@@ -201,12 +199,10 @@ struct HourlyTimelineView: View {
     }
     
     private func hourLabel(for hour: Int) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "h a"
         var components = DateComponents()
         components.hour = hour % 24
         let date = Calendar.current.date(from: components) ?? Date()
-        return formatter.string(from: date)
+        return TimeFormatter.hourFormatter.string(from: date)
     }
     
     private func entryPosition(for entry: TimeEntry) -> (yOffset: CGFloat, height: CGFloat)? {
@@ -278,7 +274,7 @@ struct CurrentTimeIndicator: View {
 struct TimelineEntryBlock: View {
     @Bindable var entry: TimeEntry
     @Environment(\.modelContext) private var modelContext
-    @ObservedObject private var undoManager = AppUndoManager.shared
+    @StateObject private var undoManager = AppUndoManager.shared
     
     @State private var showingPopover = false
     @State private var isEditing = false

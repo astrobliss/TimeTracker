@@ -11,7 +11,7 @@ struct TaskRowView: View {
     
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var timeTrackingManager: TimeTrackingManager
-    @ObservedObject private var undoManager = AppUndoManager.shared
+    @StateObject private var undoManager = AppUndoManager.shared
     
     @Query(sort: \Project.name) private var projects: [Project]
     
@@ -70,6 +70,11 @@ struct TaskRowView: View {
                     // Task name
                     TextField("Task name", text: $editName)
                         .textFieldStyle(.roundedBorder)
+                        .onSubmit {
+                            if !editName.trimmingCharacters(in: .whitespaces).isEmpty {
+                                saveEdit()
+                            }
+                        }
                     
                     // Time estimate
                     HStack {
@@ -86,7 +91,7 @@ struct TaskRowView: View {
                         .frame(width: 60)
                         
                         Picker("Minutes", selection: $editMinutes) {
-                            ForEach([0, 5, 10, 15, 20, 25, 30, 45], id: \.self) { minute in
+                            ForEach(0..<60, id: \.self) { minute in
                                 Text("\(minute)m").tag(minute)
                             }
                         }

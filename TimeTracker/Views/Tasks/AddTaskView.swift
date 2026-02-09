@@ -16,11 +16,7 @@ struct AddTaskView: View {
     @State private var newProjectName = ""
     @State private var newProjectColor = "#007AFF"
     
-    private let colorOptions = [
-        "#FF5733", "#FF8C00", "#FFD700",
-        "#32CD32", "#007AFF", "#5856D6",
-        "#AF52DE", "#FF2D55", "#8E8E93"
-    ]
+    private let colorOptions = Project.colorPalette
     
     var body: some View {
         VStack(spacing: 0) {
@@ -58,6 +54,11 @@ struct AddTaskView: View {
                             .foregroundStyle(.secondary)
                         TextField("What are you working on?", text: $taskName)
                             .textFieldStyle(.roundedBorder)
+                            .onSubmit {
+                                if !taskName.trimmingCharacters(in: .whitespaces).isEmpty {
+                                    addTask()
+                                }
+                            }
                     }
                     
                     // Time estimate
@@ -168,6 +169,17 @@ struct AddTaskView: View {
                 .padding()
             }
         }
+        .background(
+            Group {
+                Button("") {
+                    if !taskName.trimmingCharacters(in: .whitespaces).isEmpty {
+                        addTask()
+                    }
+                }
+                .keyboardShortcut(.return, modifiers: .command)
+                .hidden()
+            }
+        )
     }
     
     private var formattedEstimate: String {

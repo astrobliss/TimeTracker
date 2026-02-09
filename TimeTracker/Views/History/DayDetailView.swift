@@ -17,9 +17,7 @@ struct DayDetailView: View {
     }
     
     private var dateString: String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        return formatter.string(from: date)
+        TimeFormatter.mediumDateFormatter.string(from: date)
     }
     
     var body: some View {
@@ -206,7 +204,7 @@ struct AddTimeEntryForm: View {
 struct TimeEntryRowView: View {
     @Bindable var entry: TimeEntry
     @Environment(\.modelContext) private var modelContext
-    @ObservedObject private var undoManager = AppUndoManager.shared
+    @StateObject private var undoManager = AppUndoManager.shared
     
     @State private var isEditing = false
     @State private var showingDeleteConfirmation = false

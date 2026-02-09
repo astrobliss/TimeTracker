@@ -121,16 +121,21 @@ TimeTracker/
 │   ├── Tasks/
 │   │   ├── TaskListView.swift    # Task list with filtering
 │   │   ├── TaskRowView.swift     # Individual task row component
-│   │   └── AddTaskView.swift     # New task creation form
+│   │   ├── AddTaskView.swift     # New task creation form
+│   │   ├── SearchFilterBar.swift # Search and filter controls
+│   │   └── SettingsMenuView.swift # App settings menu
 │   ├── Projects/
 │   │   └── ProjectManagerView.swift  # Project CRUD interface
-│   └── History/
-│       ├── HistoryView.swift     # Calendar-based history view
-│       ├── DayDetailView.swift   # Daily time entry breakdown
-│       └── HourlyTimelineView.swift  # Visual hourly timeline
+│   ├── History/
+│   │   ├── HistoryView.swift     # Calendar-based history view
+│   │   ├── DayDetailView.swift   # Daily time entry breakdown
+│   │   └── HourlyTimelineView.swift  # Visual hourly timeline
+│   └── Stats/
+│       └── StatsView.swift       # Statistics and analytics
 └── Utilities/
-    ├── TimeFormatter.swift       # Time formatting helpers
-    └── LaunchAtLoginManager.swift # SMAppService integration
+    ├── TimeFormatter.swift       # Time formatting and cached DateFormatters
+    ├── LaunchAtLoginManager.swift # SMAppService integration
+    └── AppUndoManager.swift      # Undo system with toast notifications
 ```
 
 ## Data Storage

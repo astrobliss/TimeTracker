@@ -1,6 +1,5 @@
 import SwiftUI
 import SwiftData
-import AppKit
 
 struct TaskListView: View {
     @Environment(\.modelContext) private var modelContext
@@ -21,6 +20,8 @@ struct TaskListView: View {
     @State private var selectedFilter: TaskFilter = .all
     @State private var selectedProjectFilter: Project?
     @State private var showingFilters = false
+    @State private var showSearchBar = false
+    @FocusState private var isSearchFocused: Bool
     
     // Keyboard navigation state
     @State private var selectedTaskId: UUID?
@@ -41,14 +42,18 @@ struct TaskListView: View {
                 ActiveTimerBanner(task: task, remainingSeconds: remaining)
             }
             
-            // Search and filter bar
-            SearchFilterBar(
-                searchText: $searchText,
-                selectedFilter: $selectedFilter,
-                selectedProject: $selectedProjectFilter,
-                projects: projects,
-                showingFilters: $showingFilters
-            )
+            // Search and filter bar (revealed by ⌘F or when active)
+            if isSearchBarVisible {
+                SearchFilterBar(
+                    searchText: $searchText,
+                    selectedFilter: $selectedFilter,
+                    selectedProject: $selectedProjectFilter,
+                    projects: projects,
+                    showingFilters: $showingFilters,
+                    isSearchFocused: $isSearchFocused
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
             
             // Task list
             ScrollView {
@@ -72,10 +77,6 @@ struct TaskListView: View {
                                     deleteSelectedTask: $deleteSelectedTask,
                                     onReorder: { fromTask, toTask in
                                         reorderTask(fromTask, to: toTask)
-                                    },
-                                    onSelect: { task in
-                                        selectedTaskId = task.id
-                                        isTaskListFocused = true
                                     }
                                 )
                             }
@@ -100,9 +101,13 @@ struct TaskListView: View {
             HStack {
                 // Keyboard shortcuts help
                 if isTaskListFocused && selectedTaskId != nil {
-                    Text("↑↓ Navigate • ⏎ Start • ⌘E Edit • ⌘⌫ Delete")
+                    Text("↑↓ Navigate • ⏎ Complete • ␣ Track • ⌘E Edit • ⌘⌫ Delete")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
+                } else {
+                    Text("⌘N Add • ⌘F Search")
+                        .font(.caption2)
+                        .foregroundStyle(.quaternary)
                 }
                 
                 Spacer()
@@ -118,7 +123,15 @@ struct TaskListView: View {
             .padding(.horizontal, 12)
             .padding(.bottom, 8)
         }
+        .animation(.easeInOut(duration: 0.2), value: isSearchBarVisible)
+        .onChange(of: isSearchFocused) { _, focused in
+            if !focused && searchText.isEmpty && selectedFilter == .all &&
+               selectedProjectFilter == nil && !showingFilters {
+                showSearchBar = false
+            }
+        }
         .focusable()
+        .focusEffectDisabled()
         .focused($isTaskListFocused)
         .onKeyPress(.upArrow) {
             selectPreviousTask()
@@ -129,9 +142,19 @@ struct TaskListView: View {
             return .handled
         }
         .onKeyPress(.return) {
-            if let taskId = selectedTaskId, let task = filteredTasks.first(where: { $0.id == taskId }) {
-                toggleTracking(for: task)
+            guard let taskId = selectedTaskId,
+                  let task = filteredTasks.first(where: { $0.id == taskId }) else {
+                return .ignored
             }
+            completeTask(task)
+            return .handled
+        }
+        .onKeyPress(.space) {
+            guard let taskId = selectedTaskId,
+                  let task = filteredTasks.first(where: { $0.id == taskId }) else {
+                return .ignored
+            }
+            toggleTracking(for: task)
             return .handled
         }
         .onKeyPress(.escape) {
@@ -163,8 +186,23 @@ struct TaskListView: View {
                 }
                 .keyboardShortcut(.delete, modifiers: .command)
                 .hidden()
+                
+                Button("") {
+                    showSearchBar = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        isSearchFocused = true
+                    }
+                }
+                .keyboardShortcut("f", modifiers: .command)
+                .hidden()
             }
         )
+    }
+    
+    // Search bar visibility: shown explicitly via ⌘F, or when it has content/filters
+    private var isSearchBarVisible: Bool {
+        showSearchBar || !searchText.isEmpty || showingFilters ||
+        selectedFilter != .all || selectedProjectFilter != nil
     }
     
     // Keyboard navigation helpers
@@ -202,6 +240,23 @@ struct TaskListView: View {
             timeTrackingManager.stopTracking(context: modelContext)
         } else {
             timeTrackingManager.startTracking(task: task, context: modelContext)
+        }
+    }
+    
+    private func completeTask(_ task: TrackedTask) {
+        if timeTrackingManager.isTaskActive(task) {
+            timeTrackingManager.stopTracking(context: modelContext)
+        }
+        
+        let taskName = task.name
+        task.isCompleted = true
+        
+        // Move selection to next task
+        selectNextTask()
+        
+        // Show undo toast
+        AppUndoManager.shared.showUndo(message: "Completed \"\(taskName)\"") {
+            task.isCompleted = false
         }
     }
     
@@ -249,7 +304,7 @@ struct TaskListView: View {
         case .hasTimeLeft:
             tasks = tasks.filter { $0.remainingSeconds > 0 }
         case .overTime:
-            tasks = tasks.filter { $0.remainingSeconds < 0 }
+            tasks = tasks.filter { $0.remainingSeconds <= 0 }
         }
         
         return tasks
@@ -286,6 +341,8 @@ struct TaskListView: View {
         for (index, task) in tasksInGroup.enumerated() {
             task.orderIndex = index
         }
+        
+        try? modelContext.save()
     }
     
     private func addTask() {
@@ -300,21 +357,20 @@ struct TaskListView: View {
                 project = existing
             } else {
                 // Create new project with random color
-                let colors = ["#FF5733", "#FF8C00", "#FFD700", "#32CD32", "#007AFF", "#5856D6", "#AF52DE", "#FF2D55"]
-                let newProject = Project(name: projectName, colorHex: colors.randomElement() ?? "#007AFF")
+                let newProject = Project(name: projectName, colorHex: Project.colorPalette.randomElement() ?? "#007AFF")
                 modelContext.insert(newProject)
                 project = newProject
             }
         }
         
         // Calculate the next orderIndex (put new tasks at the top)
-        let maxOrderIndex = activeTasks.map(\.orderIndex).max() ?? -1
+        let minOrderIndex = activeTasks.map(\.orderIndex).min() ?? 1
         
         let task = TrackedTask(
             name: parsed.taskName,
             estimatedSeconds: parsed.estimatedSeconds,
             project: project,
-            orderIndex: maxOrderIndex + 1
+            orderIndex: minOrderIndex - 1
         )
         modelContext.insert(task)
         
@@ -334,6 +390,7 @@ struct QuickAddTaskBar: View {
     let onSubmit: () -> Void
     
     @State private var showingSuggestions = false
+    @State private var selectedSuggestionIndex = 0
     
     private var parsedPreview: TaskInputParser.ParsedTask {
         TaskInputParser.parse(input: taskInput, time: timeInput, existingProjects: projects)
@@ -365,7 +422,8 @@ struct QuickAddTaskBar: View {
             // Project suggestions (above input)
             if showingSuggestions && !suggestedProjects.isEmpty {
                 VStack(spacing: 0) {
-                    ForEach(suggestedProjects.prefix(5)) { project in
+                    let suggestions = Array(suggestedProjects.prefix(5))
+                    ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, project in
                         Button(action: { applyProjectSuggestion(project) }) {
                             HStack(spacing: 8) {
                                 Circle()
@@ -373,14 +431,24 @@ struct QuickAddTaskBar: View {
                                     .frame(width: 8, height: 8)
                                 Text(project.name)
                                     .font(.callout)
+                                    .fontWeight(index == selectedSuggestionIndex ? .medium : .regular)
                                 Spacer()
+                                if index == selectedSuggestionIndex {
+                                    Text("⏎")
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                }
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .background(Color(nsColor: .controlBackgroundColor).opacity(0.8))
+                        .background(
+                            index == selectedSuggestionIndex
+                                ? Color.accentColor.opacity(0.15)
+                                : Color(nsColor: .controlBackgroundColor).opacity(0.8)
+                        )
                     }
                 }
                 .background(Color(nsColor: .controlBackgroundColor))
@@ -433,10 +501,16 @@ struct QuickAddTaskBar: View {
                     .focused(isInputFocused)
                     .onChange(of: taskInput) { _, newValue in
                         showingSuggestions = currentMention != nil && !suggestedProjects.isEmpty
+                        // Reset suggestion selection when text changes
+                        selectedSuggestionIndex = 0
                     }
                     .onSubmit {
-                        if showingSuggestions, let first = suggestedProjects.first {
-                            applyProjectSuggestion(first)
+                        if showingSuggestions {
+                            let suggestions = Array(suggestedProjects.prefix(5))
+                            if !suggestions.isEmpty {
+                                let safeIndex = min(selectedSuggestionIndex, suggestions.count - 1)
+                                applyProjectSuggestion(suggestions[safeIndex])
+                            }
                         } else {
                             onSubmit()
                         }
@@ -602,16 +676,25 @@ struct TaskGroupView: View {
     @Binding var editSelectedTask: UUID?
     @Binding var deleteSelectedTask: UUID?
     let onReorder: (TrackedTask, TrackedTask) -> Void
-    var onSelect: ((TrackedTask) -> Void)?
+    
+    // Fluid drag reorder state
+    @State private var dragSourceIndex: Int?
+    @State private var dragCurrentIndex: Int?
+    @State private var dragOffset: CGFloat = 0
+    @State private var rowHeight: CGFloat = 56
+    
+    private let rowSpacing: CGFloat = 4
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: rowSpacing) {
             Text(projectName)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.leading, 4)
             
-            ForEach(tasks) { task in
+            ForEach(Array(tasks.enumerated()), id: \.element.id) { index, task in
+                let isDragging = dragSourceIndex == index
+                
                 TaskRowView(
                     task: task,
                     isKeyboardSelected: selectedTaskId == task.id,
@@ -620,62 +703,117 @@ struct TaskGroupView: View {
                     onEditHandled: { editSelectedTask = nil },
                     onDeleteHandled: { deleteSelectedTask = nil }
                 )
-                .opacity(draggingTask?.id == task.id ? 0.5 : 1.0)
-                .onTapGesture {
-                    onSelect?(task)
-                }
-                .draggable(task.id.uuidString) {
-                    // Drag preview
-                    TaskDragPreview(task: task)
-                        .onAppear {
-                            draggingTask = task
+                .background(
+                    GeometryReader { geo in
+                        Color.clear
+                            .preference(key: RowHeightKey.self, value: geo.size.height)
+                    }
+                )
+                .offset(y: verticalOffset(for: index))
+                .zIndex(isDragging ? 1 : 0)
+                .scaleEffect(isDragging ? 1.03 : 1.0)
+                .shadow(
+                    color: isDragging ? Color.black.opacity(0.15) : Color.clear,
+                    radius: isDragging ? 6 : 0,
+                    y: isDragging ? 2 : 0
+                )
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 8)
+                        .onChanged { value in
+                            handleDragChanged(index: index, task: task, translation: value.translation.height)
                         }
-                }
-                .dropDestination(for: String.self) { items, location in
-                    guard let draggedTaskId = items.first,
-                          let draggedTask = draggingTask,
-                          draggedTaskId == draggedTask.id.uuidString else {
-                        return false
-                    }
-                    
-                    // Only allow reordering within the same project
-                    let draggedProjectName = draggedTask.project?.name ?? "No Project"
-                    if draggedProjectName == projectName {
-                        onReorder(draggedTask, task)
-                    }
-                    return true
-                } isTargeted: { isTargeted in
-                    // Visual feedback when dragging over
-                }
+                        .onEnded { _ in
+                            handleDragEnded()
+                        }
+                )
+            }
+            .onPreferenceChange(RowHeightKey.self) { height in
+                if height > 0 { rowHeight = height }
             }
         }
-        .onChange(of: draggingTask) { oldValue, newValue in
-            if newValue == nil {
-                // Drag ended
+    }
+    
+    // MARK: - Offset Calculation
+    
+    private func verticalOffset(for index: Int) -> CGFloat {
+        guard let sourceIndex = dragSourceIndex else { return 0 }
+        let targetIndex = dragCurrentIndex ?? sourceIndex
+        
+        // Dragged item follows the gesture directly
+        if index == sourceIndex {
+            return dragOffset
+        }
+        
+        let shift = rowHeight + rowSpacing
+        
+        // Items between source and target shift to fill the gap
+        if sourceIndex < targetIndex {
+            // Dragging downward: items between source and target shift up
+            if index > sourceIndex && index <= targetIndex {
+                return -shift
+            }
+        } else if sourceIndex > targetIndex {
+            // Dragging upward: items between target and source shift down
+            if index >= targetIndex && index < sourceIndex {
+                return shift
+            }
+        }
+        
+        return 0
+    }
+    
+    // MARK: - Drag Handlers
+    
+    private func handleDragChanged(index: Int, task: TrackedTask, translation: CGFloat) {
+        if dragSourceIndex == nil {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                dragSourceIndex = index
+                dragCurrentIndex = index
+            }
+            draggingTask = task
+        }
+        
+        dragOffset = translation
+        
+        // Calculate which slot the dragged item is over
+        let shift = rowHeight + rowSpacing
+        guard shift > 0 else { return }
+        let proposedShift = Int(round(translation / shift))
+        let newIndex = max(0, min(tasks.count - 1, (dragSourceIndex ?? index) + proposedShift))
+        
+        if newIndex != dragCurrentIndex {
+            withAnimation(.interactiveSpring(response: 0.25, dampingFraction: 0.8)) {
+                dragCurrentIndex = newIndex
+            }
+        }
+    }
+    
+    private func handleDragEnded() {
+        let sourceIndex = dragSourceIndex
+        let targetIndex = dragCurrentIndex
+        
+        withAnimation(.easeInOut(duration: 0.2)) {
+            dragOffset = 0
+            dragSourceIndex = nil
+            dragCurrentIndex = nil
+            draggingTask = nil
+            
+            if let sourceIndex, let targetIndex,
+               sourceIndex != targetIndex,
+               sourceIndex < tasks.count,
+               targetIndex < tasks.count {
+                onReorder(tasks[sourceIndex], tasks[targetIndex])
             }
         }
     }
 }
 
-struct TaskDragPreview: View {
-    let task: TrackedTask
-    
-    var body: some View {
-        HStack(spacing: 8) {
-            if let project = task.project {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(project.color)
-                    .frame(width: 4, height: 24)
-            }
-            Text(task.name)
-                .font(.body)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .cornerRadius(8)
-        .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
+// Preference key for measuring row height
+private struct RowHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
@@ -725,169 +863,6 @@ struct NoResultsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.vertical, 40)
-    }
-}
-
-struct SearchFilterBar: View {
-    @Binding var searchText: String
-    @Binding var selectedFilter: TaskListView.TaskFilter
-    @Binding var selectedProject: Project?
-    let projects: [Project]
-    @Binding var showingFilters: Bool
-    
-    private var hasActiveFilters: Bool {
-        selectedFilter != .all || selectedProject != nil
-    }
-    
-    var body: some View {
-        VStack(spacing: 0) {
-            // Search bar
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                    .frame(width: 16)
-                
-                TextField("Search tasks...", text: $searchText)
-                    .textFieldStyle(.plain)
-                
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.borderless)
-                }
-                
-                Button {
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        showingFilters.toggle()
-                    }
-                } label: {
-                    Image(systemName: hasActiveFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
-                        .foregroundStyle(hasActiveFilters ? Color.accentColor : Color.secondary)
-                }
-                .buttonStyle(.borderless)
-                .help("Filter tasks")
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Color(nsColor: .controlBackgroundColor))
-            .cornerRadius(8)
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
-            
-            // Filter options
-            if showingFilters {
-                VStack(spacing: 8) {
-                    // Status filter
-                    HStack {
-                        Text("Status:")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        
-                        Picker("Filter", selection: $selectedFilter) {
-                            ForEach(TaskListView.TaskFilter.allCases, id: \.self) { filter in
-                                Text(filter.rawValue).tag(filter)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                    }
-                    
-                    // Project filter
-                    HStack {
-                        Text("Project:")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        
-                        Picker("Project", selection: $selectedProject) {
-                            Text("All Projects").tag(nil as Project?)
-                            ForEach(projects) { project in
-                                HStack {
-                                    Circle()
-                                        .fill(project.color)
-                                        .frame(width: 8, height: 8)
-                                    Text(project.name)
-                                }
-                                .tag(project as Project?)
-                            }
-                        }
-                        .labelsHidden()
-                        
-                        Spacer()
-                        
-                        if hasActiveFilters {
-                            Button("Clear") {
-                                selectedFilter = .all
-                                selectedProject = nil
-                            }
-                            .buttonStyle(.borderless)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-        }
-        .padding(.bottom, 4)
-    }
-}
-
-// MARK: - Settings Menu
-
-struct SettingsMenuView: View {
-    @StateObject private var launchAtLogin = LaunchAtLoginManager.shared
-    @EnvironmentObject private var timeTrackingManager: TimeTrackingManager
-    
-    var body: some View {
-        Menu {
-            Toggle("Launch at Login", isOn: Binding(
-                get: { launchAtLogin.isEnabled },
-                set: { _ in launchAtLogin.toggle() }
-            ))
-            
-            Divider()
-            
-            // Notification settings
-            Toggle("Timer Notifications", isOn: $timeTrackingManager.notificationsEnabled)
-            
-            if timeTrackingManager.notificationsEnabled {
-                Toggle("Notification Sound", isOn: $timeTrackingManager.soundEnabled)
-                
-                Menu("Warning at...") {
-                    ForEach([1, 2, 5, 10, 15], id: \.self) { minutes in
-                        Button {
-                            timeTrackingManager.warningThresholdMinutes = minutes
-                        } label: {
-                            HStack {
-                                Text("\(minutes) minute\(minutes == 1 ? "" : "s")")
-                                if timeTrackingManager.warningThresholdMinutes == minutes {
-                                    Image(systemName: "checkmark")
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            
-            Divider()
-            
-            Button("Quit Time Tracker") {
-                NSApplication.shared.terminate(nil)
-            }
-            .keyboardShortcut("q", modifiers: .command)
-        } label: {
-            Image(systemName: "gearshape")
-                .foregroundStyle(.secondary)
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
     }
 }
 

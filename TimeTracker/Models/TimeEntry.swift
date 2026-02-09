@@ -22,7 +22,7 @@ final class TimeEntry {
     
     var durationSeconds: Int {
         let end = endTime ?? Date()
-        return Int(end.timeIntervalSince(startTime))
+        return max(0, Int(end.timeIntervalSince(startTime)))
     }
     
     func stop() {
@@ -36,12 +36,9 @@ final class TimeEntry {
     }
     
     var formattedTimeRange: String {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        
-        let start = formatter.string(from: startTime)
+        let start = TimeFormatter.shortTimeFormatter.string(from: startTime)
         if let end = endTime {
-            return "\(start) - \(formatter.string(from: end))"
+            return "\(start) - \(TimeFormatter.shortTimeFormatter.string(from: end))"
         }
         return "\(start) - now"
     }

@@ -106,7 +106,7 @@ class TimeTrackingManager: ObservableObject {
     
     func startTracking(task: TrackedTask, context: ModelContext) {
         // Stop any existing tracking
-        if let _ = activeTask {
+        if activeTask != nil {
             stopTracking(context: context)
         }
         
