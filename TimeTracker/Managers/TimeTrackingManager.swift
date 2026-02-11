@@ -160,8 +160,10 @@ class TimeTrackingManager: ObservableObject {
     }
     
     private func tick() {
-        guard let startTime = startTime else { return }
-        elapsedSeconds = Int(Date().timeIntervalSince(startTime))
+        // Use the entry's startTime as the source of truth so that
+        // editing the active entry's start time updates elapsed/remaining correctly.
+        guard let entryStartTime = activeTimeEntry?.startTime else { return }
+        elapsedSeconds = Int(Date().timeIntervalSince(entryStartTime))
         updateRemainingTime()
         checkAndSendNotifications()
     }
